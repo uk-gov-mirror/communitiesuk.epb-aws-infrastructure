@@ -85,15 +85,6 @@ print(f"Number of measures records read: {df_measures.count()}")
 print(f"Number of savings records read: {df_savings.count()}")
 
 # -----------------------------
-# Get a list of the plan ids we want - the most recent plan id from each series that is active
-# -----------------------------
-plan_ids = (
-    df_plans.filter((F.col("Active") == True) & (F.col("PostInstall_RRN").isNotNull()))
-        .groupBy("PlanId")
-        .agg(F.max("Id").alias("Id"))
-)
-
-# -----------------------------
 # Get charges, measures, and savings into right shape
 # -----------------------------
 df_charges_mod = (
@@ -151,23 +142,43 @@ df_savings_mod = (
     )
 )
 
+# -----------------------------
+# Get a list of the plan ids we want - first the most recent plan id from each series, then select any that still have a status of live
+# -----------------------------
+max_ids = (
+    df_plans.groupBy("PlanId")
+            .agg(F.max("Id").alias("Id"))
+)
+
+# the plan record has a status field (GreenDealPlanStatusId) that is updated with the plan update:
+#   Id           Title
+#   1            NEW
+#   2            PENDING
+#   3            CANCELLED
+#   4            LIVE
+#   5            COMPLETED
+
+live_plans = (
+    max_ids.alias("m")
+        .join(
+            df_plans.alias("p"),
+            (F.col("m.PlanId") == F.col("p.PlanId")) &
+            (F.col("m.Id") == F.col("p.Id")),
+            "inner"
+        )
+        .filter(
+            (F.col("PostInstall_RRN").isNotNull()) &
+            (F.col("p.GreenDealPlanStatusId") == 4)
+        )
+        .select("p.*")
+)
 
 # -----------------------------
 # Join plans to charges, measures, savings, and providers
 # -----------------------------
-latest_plans = (
-    df_plans.alias("d")
-        .join(
-            plan_ids.alias("m"),
-            (F.col("d.PlanId") == F.col("m.PlanId")) &
-            (F.col("d.Id") == F.col("m.Id")),
-            "inner"
-            )
-            .select("d.*")
-            )
 
 result = (
-    latest_plans.alias("p")
+    live_plans.alias("p")
     .join(df_charges_mod, ["PlanId"], "left")
     .join(df_savings_mod, ["PlanId"], "left")
     .join(df_measures_mod, ["PlanId"], "left")
